@@ -7,6 +7,7 @@
     <link rel="stylesheet" type="text/css" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-dark.min.css">
+    
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -78,8 +79,6 @@
         </div>
     </header>
 
-
-
     <div class="tabs">
         <button class="tab-btn active" onclick="switchTab('pack')">
             <span class="tab-icon">📂</span> 打包模式 (Pack)
@@ -145,7 +144,9 @@
         <div id="fileListContainer" class="panel-container" style="display: none;">
             <div class="panel-header">
                 <span class="panel-title">包含的文件</span>
-                <div style="display:flex; gap:10px;"> <button class="btn-xs" onclick="triggerAddExtra()">+ 添加文件</button> <button class="btn-xs" onclick="toggleAllFiles()">全选 / 反选</button>
+                <div style="display:flex; gap:10px;"> 
+                    <button class="btn-xs" onclick="triggerAddExtra()">+ 添加文件</button> 
+                    <button class="btn-xs" onclick="toggleAllFiles()">全选 / 反选</button>
                 </div>
             </div>
             <div id="fileList" class="file-list"></div>
@@ -183,9 +184,9 @@
         <div class="guide-box">
             <div class="guide-icon">💡</div>
             <div class="guide-content">
-                <strong>Prompt 技巧：</strong> 要求 AI 按以下格式输出，即可一键还原：
+                <strong>Prompt 技巧 (Anti-Slashing)：</strong> 使用下方指令可防止 AI 生成带转义符的代码：
                 <div class="code-snippet" onclick="copyPromptHint()">
-                    "请修改代码，并严格按照 Project Packer 格式输出（包含 Project Structure 和 === File: path === 标记）。
+"请修改代码，并严格按照 Project Packer 格式输出（包含 Project Structure 和 === File: path === 标记）。
 
 ⚠️ 重要格式要求：
 1. 请直接输出【纯文本 (Raw Text)】，严禁将代码包裹在 JSON 字符串或对其进行转义处理。
