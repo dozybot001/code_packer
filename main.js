@@ -1,202 +1,334 @@
-// ================= 全局配置 =================
-const CONFIG = {
-    // 忽略的目录
-    IGNORE_DIRS: [
-        '.git', '.svn', '.hg', '.idea', '.vscode', '.settings',
-        'node_modules', 'bower_components', 'build', 'dist', 'out', 'target',
-        '__pycache__', '.venv', 'venv', 'env', '.pytest_cache',
-        '.dart_tool', '.pub-cache', 'bin', 'obj', '.gradle', 'vendor',
-        'tmp', 'temp', 'logs', 'coverage', '.next', '.nuxt',
-        'ios', 'android'
-    ],
-    // 忽略的文件后缀
-    IGNORE_EXTS: [
-        '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp', '.mp4', '.mp3', '.wav',
-        '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.zip', '.tar', '.gz', '.7z', '.rar',
-        '.exe', '.dll', '.so', '.dylib', '.class', '.jar', '.db', '.sqlite', '.sqlite3',
-        '.lock', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', '.DS_Store'
-    ]
-};
+/**
+ * Architecture Refactor: Separating logic from view.
+ * ProjectProcessor handles core logic (Filtering, Stats, parsing).
+ */
+class ProjectProcessor {
+    constructor() {
+        // Refactoring A: Consolidated Configuration
+        this.config = {
+            REPO_README_URL: "./README.md",
+            IGNORE_DIRS: [
+                '.git', '.svn', '.hg', '.idea', '.vscode', '.settings',
+                'node_modules', 'bower_components', 'build', 'dist', 'out', 'target',
+                '__pycache__', '.venv', 'venv', 'env', '.pytest_cache',
+                '.dart_tool', '.pub-cache', 'bin', 'obj', '.gradle', 'vendor',
+                'tmp', 'temp', 'logs', 'coverage', '.next', '.nuxt',
+                'ios', 'android'
+            ],
+            IGNORE_EXTS: [
+                '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp', '.mp4', '.mp3', '.wav',
+                '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.zip', '.tar', '.gz', '.7z', '.rar',
+                '.exe', '.dll', '.so', '.dylib', '.class', '.jar', '.db', '.sqlite', '.sqlite3',
+                '.lock', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', '.DS_Store'
+            ],
+            // Stability Optimization: Max file size (1MB)
+            MAX_FILE_SIZE: 1024 * 1024 
+        };
+        this.gitIgnoreRules = [];
+    }
 
-// 全局状态
-let globalFiles = [];
-let finalOutput = "";
-let currentProjectName = "project_context"; // 新增：用于存储文件夹名称
+    // Security Optimization: Improved .gitignore parsing (Fix 1.A)
+    parseGitIgnore(content) {
+        this.gitIgnoreRules = content.split('\n')
+            .map(line => line.trim())
+            .filter(line => line && !line.startsWith('#'))
+            .map(rule => {
+                // Determine if it's a directory rule based on trailing slash
+                // Logic Fix: Even without trailing slash, it might be a dir, but we mark explicit ones
+                const isDir = rule.endsWith('/');
+                const clean = rule.replace(/\/$/, '');
+                return { rule: clean, isDir }; 
+            });
+    }
 
-// ================= Tab 切换 =================
-function switchTab(tab) {
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.section-content').forEach(s => s.classList.remove('active'));
-    
-    const btns = document.querySelectorAll('.tab-btn');
-    if(tab === 'pack') {
-        btns[0].classList.add('active');
-        document.getElementById('packSection').classList.add('active');
-    } else {
-        btns[1].classList.add('active');
-        document.getElementById('unpackSection').classList.add('active');
+    shouldIgnore(path) {
+        path = path.replace(/\\/g, '/');
+        const parts = path.split('/');
+        const fileName = parts[parts.length - 1];
+        // 1. Hardcoded Checks
+        if (parts.some(p => this.config.IGNORE_DIRS.includes(p))) return true;
+        if (this.config.IGNORE_EXTS.some(ext => fileName.toLowerCase().endsWith(ext))) return true;
+
+        // 2. Advanced GitIgnore Logic (Critical Logic Fix)
+        if (this.gitIgnoreRules.length > 0) {
+            for (const { rule, isDir } of this.gitIgnoreRules) {
+                // If parts array contains the rule, treat it as a directory ignore (e.g. node_modules)
+                if (parts.includes(rule)) return true;
+                
+                // Fix 1: Multi-level path support (Optimization 1)
+                if (rule.includes('/')) {
+                    const normalizedRule = rule.startsWith('/') ? rule.slice(1) : rule;
+                    if (path === normalizedRule || 
+                        path.startsWith(normalizedRule + '/') || 
+                        path.includes('/' + normalizedRule + '/')) {
+                        return true;
+                    }
+                }
+
+                // File rule: Exact match or simple wildcard
+                if (fileName === rule) return true;
+                if (rule.startsWith('*') && fileName.endsWith(rule.slice(1))) return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Optimization: Mixed Token Algorithm
+    estimateTokens(text) {
+        const chinese = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+        const other = text.length - chinese;
+        // Chinese ~1.5, English/Code ~0.25 (approx 4 chars/token)
+        return Math.ceil(chinese * 1.5 + other * 0.25);
+    }
+
+    generateTree(paths) {
+        let tree = {};
+        paths.forEach(path => {
+            path.replace(/\\/g, '/').split('/').reduce((r, k) => r[k] = r[k] || {}, tree);
+        });
+        const print = (node, prefix = "") => {
+            let keys = Object.keys(node);
+            return keys.map((key, i) => {
+                let last = i === keys.length - 1;
+                let str = prefix + (last ? "└── " : "├── ") + key + "\n";
+                if (Object.keys(node[key]).length) str += print(node[key], prefix + (last ? "    " : "│   "));
+                return str;
+            }).join('');
+        };
+        return Object.keys(tree).length ? (paths.length > 1 ? "Root/\n" : "") + print(tree) : "";
     }
 }
 
-// ================= 逻辑 A: Packer (打包) =================
+// --- GLOBAL STATE & DOM HANDLERS ---
+const PROCESSOR = new ProjectProcessor();
+const STATE = {
+    globalFiles: [],
+    finalOutput: "",
+    currentProjectName: "code_press_context",
+    readmeLoaded: false
+};
+// Removed global CONFIG, merged into PROCESSOR.config (Fix 2.A)
 
-document.getElementById('fileInput').addEventListener('change', async (e) => {
-    const files = Array.from(e.target.files);
-    if (files.length === 0) return;
+// Architecture Optimization: Helper to get CSS vars
+function getThemeColor(varName) {
+    return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+}
 
-    resetUI();
-    setStatus('processing', '正在分析文件结构...');
-    
-    // 稍微延迟一下以显示动画，增加“处理感”
-    await new Promise(r => setTimeout(r, 400));
-    
-    globalFiles = [];
+document.addEventListener('DOMContentLoaded', () => {
+    setupDragAndDrop();
+});
 
-    if (files.length > 0) {
-        // webkitRelativePath 通常格式为 "FolderName/SubFolder/file.js"
-        const firstPath = files[0].webkitRelativePath;
-        if (firstPath) {
-            currentProjectName = firstPath.split('/')[0];
-        }
-    }
+// UI/UX Optimization: Drag & Drop Logic
+function setupDragAndDrop() {
+    const packZone = document.getElementById('packZone');
+    const inflateZone = document.getElementById('inflateZone');
 
-    for (const file of files) {
-        const path = file.webkitRelativePath || file.name;
-        if (shouldIgnore(path)) continue;
+    [packZone, inflateZone].forEach(zone => {
+        zone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            zone.classList.add('drag-active');
+        });
+        zone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            zone.classList.remove('drag-active');
+        });
+    });
+    // Pack Zone Drop (Folder scanning)
+    packZone.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        packZone.classList.remove('drag-active');
+        
+        const items = e.dataTransfer.items;
+        if (!items) return;
+
+        showLoading(true);
+        resetResultsArea();
+        
+        // Enforce minimum loading time to avoid flash (min 500ms)
+        const minWait = new Promise(resolve => setTimeout(resolve, 500));
 
         try {
-            const text = await readFileAsText(file);
-            globalFiles.push({ file, path, content: text, selected: true });
-        } catch (err) { console.warn(`Skipped binary: ${path}`); }
-    }
+            // Identify project name from first item (Refactoring 2.B: Removed redundant try-catch)
+            const entries = [];
+            for (let i = 0; i < items.length; i++) {
+                try {
+                    // Check capability first
+                    if (typeof items[i].webkitGetAsEntry === 'function') {
+                        const ent = items[i].webkitGetAsEntry();
+                        if(ent) entries.push(ent);
+                    } else if (items[i].kind === 'file') {
+                        // Fallback for non-webkit browsers if needed, though mostly using webkit logic here
+                        console.warn("webkitGetAsEntry not supported for item", i);
+                    }
+                } catch(e) { console.warn("Skipping item", e); }
+            }
 
-    if (globalFiles.length === 0) {
-        setStatus('error', '未找到有效代码文件 (全部被过滤)');
-        return;
-    }
+            if (entries.length > 0) {
+                STATE.currentProjectName = entries[0].name;
+            }
 
-    renderFileList();
-    generateOutput();
-});
+            // Logic Fix: Scan files returns array, we replace STATE only after scan
+            STATE.globalFiles = [];
+            const scannedFiles = await scanFiles(entries);
+            
+            await minWait; // Ensure loading showed for at least 500ms
 
-function shouldIgnore(path) {
-    path = path.replace(/\\/g, '/'); // 标准化路径
-    const parts = path.split('/');
-    if (parts.some(p => CONFIG.IGNORE_DIRS.includes(p))) return true;
-    if (CONFIG.IGNORE_EXTS.some(ext => path.toLowerCase().endsWith(ext))) return true;
-    return false;
-}
+            STATE.globalFiles = scannedFiles;
+            if (STATE.globalFiles.length === 0) {
+                showToast('未找到有效文件', 'error');
+            } else {
+                renderFileTree();
+                updateCapsuleStats();
+            }
+        } catch (error) {
+            console.error(error);
+            showToast('处理出错: ' + error.message, 'error');
+        } finally {
+            showLoading(false);
+        }
+    });
 
-function renderFileList() {
-    const container = document.getElementById('fileList');
-    document.getElementById('fileListContainer').style.display = 'block';
-    container.innerHTML = '';
-
-    globalFiles.forEach((item, index) => {
-        const div = document.createElement('div');
-        div.className = 'file-item';
-        // 简单的文件图标逻辑
-        const icon = item.path.includes('/') ? '📄' : '📝';
+    // Inflate Zone Drop (Txt file)
+    inflateZone.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        inflateZone.classList.remove('drag-active');
         
-        div.innerHTML = `
-            <input type="checkbox" id="f_${index}" ${item.selected ? 'checked' : ''}>
-            <span style="margin-right:8px; opacity:0.7">${icon}</span>
-            <label for="f_${index}" style="cursor:pointer; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-                ${item.path}
-            </label>
-        `;
-        div.querySelector('input').addEventListener('change', (e) => {
-            globalFiles[index].selected = e.target.checked;
-            e.target.checked ? div.classList.remove('ignored') : div.classList.add('ignored');
-            generateOutput();
-        });
-        container.appendChild(div);
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            handleInflateUpload(files[0]);
+        }
     });
 }
 
-function toggleAllFiles() {
-    const hasUnchecked = globalFiles.some(f => !f.selected);
-    globalFiles.forEach(f => f.selected = hasUnchecked);
-    renderFileList();
-    generateOutput();
-}
+// Helper: Recursive File Scanner (Now Pure Function logic)
+async function scanFiles(entries, pathPrefix = "") {
+    let results = [];
+    for (const entry of entries) {
+        if (!entry) continue;
+        const fullPath = pathPrefix ? `${pathPrefix}/${entry.name}` : entry.name;
 
-function generateOutput() {
-    const activeFiles = globalFiles.filter(f => f.selected);
-    
-    // 生成树结构
-    const paths = activeFiles.map(f => f.path);
-    let result = "Project Structure:\n" + generateTree(paths) + "\n\n================================================\n\n";
-
-    // 拼接内容
-    activeFiles.forEach(f => {
-        const cleanPath = f.path.replace(/\\/g, '/');
-        result += `=== File: ${cleanPath} ===\n${f.content}\n\n`;
-    });
-
-    finalOutput = result;
-    
-    // UI 更新
-    document.getElementById('dashboard').style.display = 'grid';
-    document.getElementById('previewContainer').style.display = 'block';
-    
-    const previewText = finalOutput.length > 3000 ? finalOutput.substring(0, 3000) + "\n... (内容过长，仅显示预览)" : finalOutput;
-    document.getElementById('previewArea').innerText = previewText;
-    
-    // 更新统计数据
-    const tokenEst = Math.ceil(finalOutput.length / 4).toLocaleString();
-    animateValue('fileCountVal', 0, activeFiles.length, 500);
-    document.getElementById('tokenVal').innerText = `~${tokenEst}`;
-    
-    setStatus('success', `✅ 已成功打包 ${activeFiles.length} 个文件`);
-}
-
-// ================= 逻辑 B: Unpacker =================
-
-document.getElementById('txtInput').addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (file) {
-        document.getElementById('pasteArea').value = await readFileAsText(file);
-        showToast("文件已读取", "success");
+        if (entry.isFile) {
+            if (PROCESSOR.shouldIgnore(fullPath)) continue;
+            try {
+                // We need to get the File object from FileEntry
+                const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+                // Logic Fix: processSingleFile returns object instead of side-effect
+                const processed = await processSingleFile(file, fullPath);
+                if (processed) results.push(processed);
+            } catch (err) { console.warn(`Error reading ${fullPath}`, err); }
+        } else if (entry.isDirectory) {
+            if (PROCESSOR.shouldIgnore(fullPath)) continue;
+            const dirReader = entry.createReader();
+            const childEntries = await new Promise((resolve, reject) => {
+                dirReader.readEntries(resolve, reject);
+            });
+            const childResults = await scanFiles(childEntries, fullPath);
+            results = results.concat(childResults);
+        }
     }
-});
+    return results;
+}
 
-// 复制防转义 Prompt
-function copyPromptHint() {
-    // 1. 获取 HTML 元素
-    const promptElement = document.getElementById('promptText');
-    
-    if (!promptElement) {
-        console.error("Prompt element not found!");
+async function processSingleFile(file, path) {
+    // Stability: OOM Protection for large files
+    if (file.size > PROCESSOR.config.MAX_FILE_SIZE) {
+        return { 
+            file, path, 
+            content: `// [WARN] File skipped: size (${(file.size/1024/1024).toFixed(2)}MB) exceeds limit.\n`, 
+            selected: true 
+        };
+    }
+
+    // Security: Check for .gitignore in root
+    // Logic Fix: Use "/" detection or simple logic, parse but return null
+    if (file.name === '.gitignore') {
+        const text = await readFileAsText(file);
+        PROCESSOR.parseGitIgnore(text);
+        return null; // Don't add .gitignore to output
+    }
+
+    try {
+        const text = await readFileAsText(file);
+        // Logic Fix: Return the object
+        return { file, path, content: text, selected: true };
+    } catch (err) { 
+        console.warn(`Skipped binary or error: ${path}`);
+        return null;
+    }
+}
+
+// Optimization 2.A: Support Encoding Selection
+function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = reject;
+        const encoding = document.getElementById('encodingSelect') ? document.getElementById('encodingSelect').value : 'UTF-8';
+        reader.readAsText(file, encoding);
+    });
+}
+
+// UI/UX Optimization: Loading Overlay
+function showLoading(show) {
+    const overlay = document.getElementById('loadingOverlay');
+    if (show) overlay.classList.remove('hidden');
+    else overlay.classList.add('hidden');
+}
+
+function doFlatten() {
+    const activeFiles = STATE.globalFiles.filter(f => f.selected);
+    if (activeFiles.length === 0) {
+        showToast('请至少选择一个文件', 'error');
         return;
     }
 
-    // 2. 获取文本内容 (innerText 会自动保留 HTML 中的换行)
-    const text = promptElement.innerText;
+    showLoading(true);
+    // UI/UX: Force minimum load time to avoid flash
+    const minWait = new Promise(r => setTimeout(r, 500));
+    // Defer processing to next tick to allow UI update
+    setTimeout(async () => {
+        const paths = activeFiles.map(f => f.path);
+        let result = "Project Structure:\n" + PROCESSOR.generateTree(paths) + "\n\n================================================\n\n";
+        
+        activeFiles.forEach(f => {
+            const cleanPath = f.path.replace(/\\/g, '/');
+            result += `=== File: ${cleanPath} ===\n${f.content}\n\n`;
+        });
+        
+        STATE.finalOutput = result;
+        
+        const previewArea = document.getElementById('previewArea');
+        // Stability: Limit preview size
+        const previewText = STATE.finalOutput.length > 3000 ?
+            STATE.finalOutput.substring(0, 3000) + "\n... (内容过长，仅显示预览)" : STATE.finalOutput;
+        
+        previewArea.innerText = previewText;
 
-    // 3. 写入剪贴板
-    navigator.clipboard.writeText(text);
-    showToast("Prompt 已复制！", "success");
+        await minWait; // Wait for minimum time
+        
+        showToast(`已成功压扁 ${activeFiles.length} 个文件`, 'success');
+        showLoading(false);
+    }, 50);
 }
 
-async function unpackToZip() {
+async function inflateToZip() {
     const content = document.getElementById('pasteArea').value;
     if (!content.trim()) { 
         showToast("内容为空，请先粘贴代码", "error"); 
         return;
     }
 
-    const btn = document.querySelector('.large-btn');
+    const btn = document.querySelector('#inflateSection .large-btn');
     const originalText = btn.innerHTML;
-    btn.innerHTML = '<span class="status-icon">⏳</span> 解析中...';
+    btn.innerHTML = '<span class="status-icon">⏳</span> 正在熔铸...';
+    // Stability Optimization: Looser Regex
+    const markerRegex = /(?:^|\r?\n)[=-]{3,}\s*File:\s*(.*?)\s*[=-]{3,}(?:\r?\n|$)/g;
     const zip = new JSZip();
     let fileCount = 0;
-
-    // --- 核心解析逻辑 ---
-    const markerRegex = /(?:\r?\n|^)=== File: (.*?) ===(?:\r?\n|$)/g;
+    
     let match;
     let matches = [];
-
     while ((match = markerRegex.exec(content)) !== null) {
         matches.push({
             path: match[1].trim(),
@@ -206,50 +338,39 @@ async function unpackToZip() {
     }
 
     if (matches.length === 0) {
-        alert("未找到有效的文件标记！格式应为：=== File: path/to/file.ext ===");
+        alert("未找到有效的文件标记！\n格式应为：=== File: path/to/file.ext ===");
         btn.innerHTML = originalText;
         return;
     }
 
-    // ==========================================
-    // [新增] 1. 尝试提取项目根目录名
-    // ==========================================
-    let extractedName = "project_unpacked";
+    let extractedName = "code_restored";
     if (matches.length > 0) {
-        //以此判断：通常第一个文件的路径类似 "RootFolder/src/main.js"
         const firstPath = matches[0].path.replace(/\\/g, '/');
         const parts = firstPath.split('/');
-        // 如果路径包含文件夹结构（parts长度>1），则取第一部分
-        if (parts.length > 1) {
-            extractedName = parts[0]; 
-        }
+        if (parts.length > 1) extractedName = parts[0];
     }
-
-    // ==========================================
-    // [新增] 2. 生成时间戳 (YYYYMMDD_HHMM)
-    // ==========================================
     const now = new Date();
-    const timeStr = now.getFullYear() +
-                    String(now.getMonth() + 1).padStart(2, '0') +
-                    String(now.getDate()).padStart(2, '0') + "_" +
-                    String(now.getHours()).padStart(2, '0') +
-                    String(now.getMinutes()).padStart(2, '0');
-    
-    // 组合文件名
+    const timeStr = generateTimeStr(now);
     const zipFileName = `${extractedName}_${timeStr}.zip`;
 
-    // --- 遍历写入文件 ---
     for (let i = 0; i < matches.length; i++) {
         const current = matches[i];
         const next = matches[i + 1];
         const contentStart = current.endIndex;
+        // Determine end of content based on next match start
         const contentEnd = next ? next.startIndex : content.length;
+        
         let rawContent = content.substring(contentStart, contentEnd);
-        let cleanPath = current.path.replace(/\\/g, '/').replace(/^(\.\/|\/)/, '');
+        
+        // Security Optimization: Sanitize Paths (Fix 1.B: Safer Regex)
+        let cleanPath = current.path
+            .replace(/\\/g, '/')
+            .replace(/^(\.\/|\/)+/, '') // Remove leading ./ or /
+            .replace(/(^|[\/\\])\.\.([\/\\]|$)/g, '$1$2');
+        // Smart remove .. to prevent traversal
 
         if (!cleanPath || cleanPath.endsWith('/')) continue;
-        
-        // 清理首尾空行
+        // Trim leading newline from the extraction if present
         rawContent = rawContent.replace(/^\s*[\r\n]/, '').replace(/[\r\n]\s*$/, '');
         zip.file(cleanPath, rawContent);
         fileCount++;
@@ -258,7 +379,6 @@ async function unpackToZip() {
     if (fileCount > 0) {
         try {
             const blob = await zip.generateAsync({type:"blob"});
-            // [修改] 使用动态生成的文件名
             saveAs(blob, zipFileName);
             showToast(`成功还原 ${fileCount} 个文件`, "success");
         } catch (e) {
@@ -272,38 +392,326 @@ async function unpackToZip() {
     btn.innerHTML = originalText;
 }
 
-// ================= UI 工具函数 =================
-
-function resetUI() {
-    document.getElementById('dashboard').style.display = 'none';
-    document.getElementById('previewContainer').style.display = 'none';
-    document.getElementById('fileListContainer').style.display = 'none';
-    finalOutput = "";
-    // 重置状态栏
-    const cap = document.getElementById('statusCapsule');
-    cap.className = 'status-capsule idle';
-    document.getElementById('statusText').innerText = '准备就绪';
+function switchTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.section-content').forEach(s => s.classList.remove('active'));
+    
+    const btns = document.querySelectorAll('.tab-btn');
+    if(tab === 'pack') {
+        btns[0].classList.add('active');
+        document.getElementById('packSection').classList.add('active');
+    } else {
+        btns[1].classList.add('active');
+        document.getElementById('inflateSection').classList.add('active');
+    }
 }
 
-function setStatus(type, msg) {
-    const cap = document.getElementById('statusCapsule');
-    const txt = document.getElementById('statusText');
-    const icon = cap.querySelector('.status-icon');
+// Native File Input Handler (Legacy support + Extra files)
+document.getElementById('fileInput').addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+
+    showLoading(true);
+    resetResultsArea(); 
     
-    cap.className = 'status-capsule ' + type;
-    txt.innerText = msg;
+    // UI/UX: Min wait time
+    const minWait = new Promise(r => setTimeout(r, 500));
     
-    if(type === 'processing') icon.innerText = '⏳';
-    else if(type === 'success') icon.innerText = '🎉';
-    else if(type === 'error') icon.innerText = '❌';
-    else icon.innerText = '✨';
+    STATE.globalFiles = [];
+
+    if (files.length > 0) {
+        const firstPath = files[0].webkitRelativePath;
+        if (firstPath) {
+             STATE.currentProjectName = firstPath.split('/')[0];
+        }
+    }
+
+    // Pre-scan for .gitignore using simple find (since we can't easily structure native files yet)
+    // Fix: Improve logic to find root .gitignore
+    const gitIgnoreFile = files.find(f => f.name === '.gitignore' && (f.webkitRelativePath.split('/').length === 2));
+    if (gitIgnoreFile) {
+        const text = await readFileAsText(gitIgnoreFile);
+        PROCESSOR.parseGitIgnore(text);
+    }
+
+    const processedList = [];
+    for (const file of files) {
+        const path = file.webkitRelativePath || file.name;
+        if (PROCESSOR.shouldIgnore(path)) continue;
+        
+        const res = await processSingleFile(file, path);
+        if (res) processedList.push(res);
+    }
+
+    await minWait;
+    STATE.globalFiles = processedList;
+
+    if (STATE.globalFiles.length === 0) {
+        showToast('未找到有效代码文件 (全部被过滤)', 'error');
+        showLoading(false);
+        return;
+    }
+
+    renderFileTree();
+    updateCapsuleStats(); 
+    showLoading(false);
+});
+
+document.getElementById('extraFileInput').addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+
+    let addedCount = 0;
+    for (const file of files) {
+        const path = "Extra_Files/" + file.name;
+        // Logic fix: Handle return object
+        const existIndex = STATE.globalFiles.findIndex(f => f.path === path);
+        if (existIndex > -1) STATE.globalFiles.splice(existIndex, 1);
+
+        try {
+            const res = await processSingleFile(file, path);
+            if (res) {
+                STATE.globalFiles.push(res); // Logic: Only here we modify state for extra files
+                addedCount++;
+            }
+        } 
+        catch (err) { console.warn(`Skipped: ${path}`); }
+    }
+
+    if (addedCount > 0) {
+        renderFileTree();
+        updateCapsuleStats();
+        showToast(`已追加 ${addedCount} 个文件`, "success");
+        
+        if (STATE.currentProjectName === "code_press_context" && files.length > 0) {
+             STATE.currentProjectName = "Mixed_Files";
+        }
+        resetResultsArea();
+    }
+    e.target.value = '';
+});
+
+function triggerAddExtra() { 
+    document.getElementById('extraFileInput').click();
+}
+
+// UI/UX: Copy Tree Only feature
+async function copyTreeOnly() {
+    // UI/UX Optimization 3.A: Check if project loaded first
+    if (STATE.globalFiles.length === 0) {
+        showToast("请先上传项目", "error");
+        return;
+    }
+
+    const activeFiles = STATE.globalFiles.filter(f => f.selected);
+    if (activeFiles.length === 0) {
+        showToast("请至少选择一个文件", "error");
+        return;
+    }
+    const paths = activeFiles.map(f => f.path);
+    const treeText = "Project Structure:\n" + PROCESSOR.generateTree(paths);
+    try {
+        await navigator.clipboard.writeText(treeText);
+        showToast("已仅复制目录树", "success");
+    } catch (e) {
+        console.error(e);
+        showToast("复制失败", "error");
+    }
+}
+
+function renderFileTree() {
+    const container = document.getElementById('fileTree');
+    container.innerHTML = '';
+    const treeRoot = {};
+    STATE.globalFiles.forEach((fileItem, index) => {
+        const parts = fileItem.path.split('/'); 
+        let currentLevel = treeRoot;
+        
+        parts.forEach((part, i) => {
+            if (i === parts.length - 1) {
+                currentLevel[part] = { _type: 'file', _index: index, _name: part };
+            } else {
+                if (!currentLevel[part]) {
+                    currentLevel[part] = { _type: 'folder', _name: part, _children: {} };
+                }
+                currentLevel = currentLevel[part]._children;
+             }
+        });
+    });
+    Object.keys(treeRoot).forEach(key => {
+        const rootNode = treeRoot[key];
+        const rootEl = createTreeNode(rootNode);
+        container.appendChild(rootEl);
+    });
+}
+
+function createTreeNode(node) {
+    if (node._type === 'file') {
+        const fileData = STATE.globalFiles[node._index];
+        const div = document.createElement('div');
+        div.className = `tree-leaf ${!fileData.selected ? 'deselected' : ''}`;
+        div.innerHTML = `
+            <span class="leaf-icon">📄</span>
+            <span class="leaf-name">${node._name}</span>
+            ${!fileData.selected ? '' : '<span class="status-dot"></span>'}
+        `;
+        div.onclick = () => toggleFileSelection(node._index, div);
+        return div;
+    } else {
+        const details = document.createElement('details');
+        details.className = 'tree-branch';
+        details.open = true;
+        const summary = document.createElement('summary');
+        summary.className = 'tree-summary';
+        summary.innerHTML = `<span class="folder-icon">📂</span> ${node._name}`;
+        
+        details.appendChild(summary);
+        
+        const childrenContainer = document.createElement('div');
+        childrenContainer.className = 'branch-content';
+        const childrenKeys = Object.keys(node._children).sort((a, b) => {
+            const nodeA = node._children[a];
+            const nodeB = node._children[b];
+            if (nodeA._type !== nodeB._type) {
+                return nodeA._type === 'folder' ? -1 : 1;
+            }
+            return a.localeCompare(b);
+        });
+        
+        childrenKeys.forEach(key => {
+            childrenContainer.appendChild(createTreeNode(node._children[key]));
+        });
+        details.appendChild(childrenContainer);
+        return details;
+    }
+}
+
+function toggleFileSelection(index, domElement) {
+    STATE.globalFiles[index].selected = !STATE.globalFiles[index].selected;
+    if (STATE.globalFiles[index].selected) {
+        domElement.classList.remove('deselected');
+        const dot = domElement.querySelector('.status-dot');
+        if(dot) dot.remove();
+        domElement.insertAdjacentHTML('beforeend', '<span class="status-dot"></span>');
+    } else {
+        domElement.classList.add('deselected');
+        const dot = domElement.querySelector('.status-dot');
+        if(dot) dot.remove();
+    }
+    
+    updateCapsuleStats();
+    resetResultsArea();
+}
+
+function toggleAllFiles() {
+    const hasUnchecked = STATE.globalFiles.some(f => !f.selected);
+    STATE.globalFiles.forEach(f => f.selected = hasUnchecked);
+    renderFileTree();
+    updateCapsuleStats();
+    resetResultsArea();
+}
+
+function updateCapsuleStats() {
+    const activeFiles = STATE.globalFiles.filter(f => f.selected);
+    document.getElementById('fileCountVal').innerText = activeFiles.length;
+    let totalChars = 0;
+    activeFiles.forEach(f => totalChars += f.content.length);
+    
+    // Stability Optimization: New Token Algorithm
+    const tokenEst = PROCESSOR.estimateTokens(activeFiles.map(f => f.content).join(''));
+    document.getElementById('tokenVal').innerText = `~${tokenEst.toLocaleString()}`;
+}
+
+async function toggleSidebar() {
+    const body = document.body;
+    const isOpen = body.classList.contains('sidebar-open');
+    if (isOpen) {
+        body.classList.remove('sidebar-open');
+        document.getElementById('mainContainer').onclick = null;
+    } else {
+        body.classList.add('sidebar-open');
+        setTimeout(() => {
+            document.getElementById('mainContainer').onclick = toggleSidebar;
+        }, 100);
+        if (!STATE.readmeLoaded) {
+            await fetchAndRenderReadme();
+        }
+    }
+}
+
+async function fetchAndRenderReadme() {
+    const contentDiv = document.getElementById('readmeContent');
+    try {
+        // Refactoring A: Use merged config
+        const response = await fetch(PROCESSOR.config.REPO_README_URL + '?t=' + Date.now());
+        if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+        
+        const markdownText = await response.text();
+        // Security Optimization: Use DOMPurify
+        if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+            const rawHtml = marked.parse(markdownText);
+            contentDiv.innerHTML = DOMPurify.sanitize(rawHtml);
+            STATE.readmeLoaded = true;
+        } else {
+            contentDiv.innerHTML = "<p style='color:red'>Marked or DOMPurify not loaded.</p>";
+        }
+    } catch (error) {
+        console.error("README Load Error:", error);
+        contentDiv.innerHTML = `
+            <div style="text-align:center; padding-top:50px; color:var(--text-secondary)">
+                <p>⚠️ 无法加载 README</p>
+                <button class="btn btn-secondary" onclick="fetchAndRenderReadme()" style="margin:20px auto">重试</button>
+            </div>
+        `;
+    }
+}
+
+// UI/UX Optimization: Explicit File Upload for Inflate
+document.getElementById('txtInput').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    handleInflateUpload(file);
+});
+async function handleInflateUpload(file) {
+    if (file) {
+        try {
+            const text = await readFileAsText(file);
+            document.getElementById('pasteArea').value = text;
+            showToast(`已加载文件: ${file.name}`, "success");
+        } catch (e) {
+            showToast("文件读取失败", "error");
+        }
+    }
+}
+
+function cleanEscapedText() {
+    const area = document.getElementById('pasteArea');
+    let text = area.value;
+    if (!text) { showToast("请先粘贴内容", "error"); return; }
+    
+    if (text.trim().startsWith('"') && text.trim().endsWith('"')) { 
+        text = text.trim().slice(1, -1);
+    }
+    text = text.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\t/g, '\t').replace(/\\\\/g, '\\');
+    area.value = text;
+    showToast("格式已修复！", "success");
+}
+
+function clearPasteArea() {
+    document.getElementById('pasteArea').value = '';
+    showToast('内容已清空');
+}
+
+function resetResultsArea() {
+    STATE.finalOutput = "";
+    document.getElementById('previewArea').innerText = "";
 }
 
 function showToast(msg, type = 'normal') {
     const container = document.getElementById('toast-container');
     const el = document.createElement('div');
     el.className = `toast ${type}`;
-    el.innerHTML = type === 'success' ? `<span>✅</span> ${msg}` : (type === 'error' ? `<span>⚠️</span> ${msg}` : msg);
+    el.innerHTML = type === 'success' ?
+    `<span>✅</span> ${msg}` : (type === 'error' ? `<span>⚠️</span> ${msg}` : msg);
     
     container.appendChild(el);
     setTimeout(() => {
@@ -313,321 +721,56 @@ function showToast(msg, type = 'normal') {
     }, 3000);
 }
 
-// 数字滚动动画
-function animateValue(id, start, end, duration) {
-    if (start === end) return;
-    const range = end - start;
-    let current = start;
-    const increment = end > start ? 1 : -1;
-    const stepTime = Math.abs(Math.floor(duration / range));
-    const obj = document.getElementById(id);
-    
-    const timer = setInterval(function() {
-        current += increment;
-        obj.innerHTML = current;
-        if (current == end) {
-            clearInterval(timer);
-        }
-    }, Math.max(stepTime, 20)); // 最快20ms一帧
-}
-
-function readFileAsText(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target.result);
-        reader.onerror = reject;
-        reader.readAsText(file);
-    });
+function generateTimeStr(date) {
+    return date.getFullYear() +
+           String(date.getMonth() + 1).padStart(2, '0') +
+           String(date.getDate()).padStart(2, '0') + "_" +
+           String(date.getHours()).padStart(2, '0') +
+           String(date.getMinutes()).padStart(2, '0');
 }
 
 function downloadFile() {
-
-    if (!finalOutput) {
+    if (!STATE.finalOutput) {
         showToast("没有可下载的内容", "error");
         return;
     }
-
-    const blob = new Blob([finalOutput], { type: 'text/plain' });
-    
-    // [修改] 生成带时间戳的文件名
-    const now = new Date();
-    // 格式化为 YYYYMMDD_HHMM
-    const timeStr = now.getFullYear() +
-                    String(now.getMonth() + 1).padStart(2, '0') +
-                    String(now.getDate()).padStart(2, '0') + "_" +
-                    String(now.getHours()).padStart(2, '0') +
-                    String(now.getMinutes()).padStart(2, '0');
-    
-    const fileName = `${currentProjectName}_${timeStr}.txt`;
+    // Stability: Blob is better than large strings
+    const blob = new Blob([STATE.finalOutput], { type: 'text/plain;charset=utf-8' });
+    const timeStr = generateTimeStr(new Date());
+    const fileName = `${STATE.currentProjectName}_${timeStr}.txt`;
     
     saveAs(blob, fileName);
-    showToast(`文件下载已开始: ${fileName}`, "success");
-
-    // [新增] 在这里触发历史记录保存
-    saveHistory();
+    showToast(`下载开始: ${fileName}`, "success");
 }
 
 async function copyToClipboard() {
-    // 1. 确保有内容
-    if (!finalOutput) {
+    if (!STATE.finalOutput) {
         showToast("没有可复制的内容", "error");
         return;
     }
 
-    try {
-        await navigator.clipboard.writeText(finalOutput);
-        showToast("已复制到剪贴板！", "success");
-        
-        // [新增] 复制成功后，触发历史记录保存
-        saveHistory(); 
+    // Optimization 2.B: UI Feedback for large copy operations
+    const btn = document.querySelector('#previewContainer .tool-btn');
+    const originalText = btn.innerHTML;
+    btn.innerHTML = '<span class="btn-icon">⏳</span>复制中...'; // Feedback
 
+    // Force wait to let UI render the change
+    await new Promise(r => setTimeout(r, 100));
+
+    try {
+        await navigator.clipboard.writeText(STATE.finalOutput);
+        showToast("已复制到剪贴板！", "success");
     } catch (e) { 
         showToast('复制失败，请尝试下载文件', 'error'); 
         console.error(e);
+    } finally {
+        btn.innerHTML = originalText; // Restore
     }
 }
 
-function generateTree(paths) {
-    let tree = {};
-    paths.forEach(path => {
-        path.replace(/\\/g, '/').split('/').reduce((r, k) => r[k] = r[k] || {}, tree);
-    });
-    
-    function print(node, prefix = "") {
-        let keys = Object.keys(node);
-        return keys.map((key, i) => {
-            let last = i === keys.length - 1;
-            let str = prefix + (last ? "└── " : "├── ") + key + "\n";
-            if (Object.keys(node[key]).length) str += print(node[key], prefix + (last ? "    " : "│   "));
-            return str;
-        }).join('');
-    }
-    return Object.keys(tree).length ? (paths.length > 1 ? "Root/\n" : "") + print(tree) : "";
-}
-
-// ================= Sidebar & README 逻辑 =================
-
-let readmeLoaded = false;
-// 使用本地路径，并添加时间戳以避免缓存问题
-const REPO_README_URL = "./README.md";
-
-async function toggleSidebar() {
-    const body = document.body;
-    const isOpen = body.classList.contains('sidebar-open');
-    
-    if (isOpen) {
-        // 关闭
-        body.classList.remove('sidebar-open');
-        // 允许主界面点击
-        document.getElementById('mainContainer').onclick = null;
-    } else {
-        // 打开
-        body.classList.add('sidebar-open');
-        
-        // 点击主界面也可以关闭
-        setTimeout(() => {
-            document.getElementById('mainContainer').onclick = toggleSidebar;
-        }, 100);
-
-        // 如果还没加载过，去获取内容
-        if (!readmeLoaded) {
-            await fetchAndRenderReadme();
-        }
-    }
-}
-
-async function fetchAndRenderReadme() {
-    const contentDiv = document.getElementById('readmeContent');
-    
-    try {
-        // 添加时间戳参数 '?t=' + Date.now() 强制刷新缓存
-        const response = await fetch(REPO_README_URL + '?t=' + Date.now());
-        if (!response.ok) {
-            throw new Error(`HTTP Error: ${response.status} (Check file path)`);
-        }
-        
-        const markdownText = await response.text();
-        
-        // 使用 marked 解析 (需要在 index.html 引入 marked.js)
-        if (typeof marked !== 'undefined') {
-            // 配置 marked 以允许 GFM (GitHub Flavored Markdown)
-            contentDiv.innerHTML = marked.parse(markdownText);
-            readmeLoaded = true;
-        } else {
-            contentDiv.innerHTML = "<p style='color:red'>Marked.js library not loaded.</p>";
-        }
-        
-    } catch (error) {
-        console.error("README Load Error:", error);
-        contentDiv.innerHTML = `
-            <div style="text-align:center; padding-top:50px; color:var(--text-secondary)">
-                <p>⚠️ 无法加载 README</p>
-                <p style="font-size:0.8rem; opacity:0.7">${error.message}</p>
-                <p style="font-size:0.8rem; color:#666">请确保 README.md 文件与 index.html 在同一目录下。</p>
-                <button class="btn btn-secondary" onclick="fetchAndRenderReadme()" style="margin:20px auto">重试</button>
-            </div>
-        `;
-    }
-}
-
-// ================= 新增逻辑: 手动添加额外文件 =================
-
-const extraInput = document.getElementById('extraFileInput');
-
-function triggerAddExtra() {
-    extraInput.click();
-}
-
-extraInput.addEventListener('change', async (e) => {
-    const files = Array.from(e.target.files);
-    if (files.length === 0) return;
-
-    setStatus('processing', '正在追加文件...');
-    
-    let addedCount = 0;
-    for (const file of files) {
-        // 额外添加的文件没有 webkitRelativePath，或者路径不包含根目录
-        // 我们人为给它加一个虚拟目录 "Extra_Files/" 以便在树形图中区分
-        const path = "Extra_Files/" + file.name;
-        
-        // 查重：如果已经存在同名路径，先删除旧的
-        const existIndex = globalFiles.findIndex(f => f.path === path);
-        if (existIndex > -1) globalFiles.splice(existIndex, 1);
-
-        try {
-            const text = await readFileAsText(file);
-            globalFiles.push({ file, path, content: text, selected: true });
-            addedCount++;
-        } catch (err) { console.warn(`Skipped: ${path}`); }
-    }
-
-    if (addedCount > 0) {
-        renderFileList();
-        generateOutput();
-        showToast(`已追加 ${addedCount} 个文件`, "success");
-        // 如果是首次仅上传单文件，也更新项目名
-        if (currentProjectName === "project_context" && files.length > 0) {
-             currentProjectName = "Mixed_Files";
-        }
-    }
-    
-    // 清空 input 允许重复选择同名文件
-    extraInput.value = '';
-});
-
-// ================= 历史记录管理系统 =================
-
-const MAX_HISTORY = 10; // 只保留最近10条
-
-// 页面加载时初始化历史记录
-window.addEventListener('DOMContentLoaded', () => {
-    renderHistory();
-    // 检查是否有默认项目提示 (这里只能做UI提示，无法自动加载)
-    const history = getHistory();
-    if (history.length > 0) {
-        console.log("欢迎回来，上次打包的项目是: " + history[0].name);
-    }
-});
-
-function getHistory() {
-    try {
-        return JSON.parse(localStorage.getItem('packer_history') || '[]');
-    } catch { return []; }
-}
-
-function saveHistory() {
-    const history = getHistory();
-    const now = new Date().toLocaleString();
-    
-    // 构建新记录
-    const newRecord = {
-        name: currentProjectName,
-        time: now,
-        count: globalFiles.length,
-        tokenEst: document.getElementById('tokenVal').innerText
-    };
-
-    // 移除同名旧记录 (如果想把最新的顶上来)
-    const existingIndex = history.findIndex(h => h.name === newRecord.name);
-    if (existingIndex > -1) {
-        history.splice(existingIndex, 1);
-    }
-
-    // 插入头部
-    history.unshift(newRecord);
-    
-    // 截断
-    if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
-
-    localStorage.setItem('packer_history', JSON.stringify(history));
-    
-    renderHistory();
-}
-
-function renderHistory() {
-    const history = getHistory();
-    const panel = document.getElementById('historyPanel');
-    const list = document.getElementById('historyList');
-    
-    if (history.length === 0) {
-        panel.style.display = 'none';
-        return;
-    }
-
-    panel.style.display = 'block';
-    list.innerHTML = '';
-    
-    history.forEach(item => {
-        const div = document.createElement('div');
-        div.className = 'file-item';
-        div.style.justifyContent = 'space-between';
-        div.style.cursor = 'default';
-        div.innerHTML = `
-            <div>
-                <span style="color:var(--accent-primary); font-weight:bold;">${item.name}</span>
-                <span style="font-size:0.8em; opacity:0.6; margin-left:8px;">${item.time}</span>
-            </div>
-            <div style="font-size:0.8em; opacity:0.8;">
-                ${item.count} Files | ${item.tokenEst} Tokens
-            </div>
-        `;
-        list.appendChild(div);
-    });
-}
-
-function clearHistory() {
-    if(confirm("确定清空所有历史记录吗？")) {
-        localStorage.removeItem('packer_history');
-        renderHistory();
-        showToast("历史记录已清空", "success");
-    }
-}
-
-// ================= 新增：格式清洗工具 =================
-
-function cleanEscapedText() {
-    const area = document.getElementById('pasteArea');
-    let text = area.value;
-
-    if (!text) {
-        showToast("请先粘贴内容", "error");
-        return;
-    }
-
-    // 1. 尝试去除首尾可能存在的包裹引号
-    // 很多时候 AI 会把整个内容包在 "..." 里面
-    if (text.trim().startsWith('"') && text.trim().endsWith('"')) {
-        text = text.trim().slice(1, -1);
-    }
-
-    // 2. 核心清洗逻辑：将字面意义的转义符替换为真实字符
-    // replace(/\\n/g, '\n') 意思是：找到所有的 \n 字符，变成真正的换行
-    text = text
-        .replace(/\\n/g, '\n')  // 修复换行
-        .replace(/\\"/g, '"')   // 修复双引号
-        .replace(/\\t/g, '\t')  // 修复缩进
-        .replace(/\\\\/g, '\\'); // 修复反斜杠本身
-
-    area.value = text;
-    showToast("格式已修复！斜杠已去除", "success");
+function copyPromptHint() {
+    const promptElement = document.getElementById('promptText');
+    if (!promptElement) return;
+    navigator.clipboard.writeText(promptElement.innerText);
+    showToast("Prompt 已复制！", "success");
 }
